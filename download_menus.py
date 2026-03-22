@@ -338,15 +338,57 @@ def build_bar_menu(consumer_data, out_of_stock_guids=None):
     return bar_menu
 
 
-def generate_bar_menu_markdown(bar_menu):
-    """Render bar menu as markdown."""
+CAFE_MENU_GROUPS = {"Coffee", "Tea", "Non-Alcoholic/Kombucha", "Beverages"}
+
+
+def build_cafe_menu(consumer_data, out_of_stock_guids=None):
+    """Extract cafe/coffee menu from Cafe POS Menu.
+
+    Includes Coffee, Tea, Non-Alcoholic/Kombucha, and Beverages groups.
+    Items whose GUID is in out_of_stock_guids are excluded.
+    """
+    if out_of_stock_guids is None:
+        out_of_stock_guids = set()
+    menus_by_name = {m["name"]: m for m in consumer_data["menus"]}
+    cafe_menu = {
+        "fetched_at": consumer_data["fetched_at"],
+        "toast_last_modified": consumer_data["toast_last_modified"],
+        "sections": [],
+    }
+
+    def slim_item(item):
+        return {
+            "name": item["name"],
+            "guid": item["guid"],
+            "description": item.get("description", ""),
+            "price": item["price"],
+            "price_display": item["price_display"],
+        }
+
+    def is_available(item):
+        return item["guid"] not in out_of_stock_guids
+
+    pos_menu = menus_by_name.get("Cafe POS Menu")
+    if pos_menu:
+        for group in pos_menu["groups"]:
+            if group["name"] not in CAFE_MENU_GROUPS:
+                continue
+            items = [slim_item(i) for i in group["items"] if is_available(i)]
+            if items:
+                cafe_menu["sections"].append({"name": group["name"], "items": items})
+
+    return cafe_menu
+
+
+def generate_sectioned_markdown(title, data):
+    """Render a sectioned menu (bar, cafe, etc.) as markdown."""
     lines = []
-    fetched_dt = datetime.fromisoformat(bar_menu["fetched_at"])
-    lines.append("# Lowertown Bar Menu")
+    fetched_dt = datetime.fromisoformat(data["fetched_at"])
+    lines.append(f"# {title}")
     lines.append(f"*Last updated: {fetched_dt.strftime('%B %d, %Y at %-I:%M %p')}*")
     lines.append("")
 
-    for section in bar_menu["sections"]:
+    for section in data["sections"]:
         lines.append(f"## {section['name']}")
         lines.append("")
         for item in section["items"]:
@@ -497,7 +539,13 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
     # Post-processors
     bar_menu = build_bar_menu(consumer_data, out_of_stock)
     atomic_write(CURRENT_DIR / "bar_menu.json", json.dumps(bar_menu, indent=2))
-    atomic_write(CURRENT_DIR / "bar_menu.md", generate_bar_menu_markdown(bar_menu))
+    atomic_write(CURRENT_DIR / "bar_menu.md",
+                 generate_sectioned_markdown("Lowertown Bar Menu", bar_menu))
+
+    cafe_menu = build_cafe_menu(consumer_data, out_of_stock)
+    atomic_write(CURRENT_DIR / "cafe_menu.json", json.dumps(cafe_menu, indent=2))
+    atomic_write(CURRENT_DIR / "cafe_menu.md",
+                 generate_sectioned_markdown("Lowertown Cafe Menu", cafe_menu))
 
     # Log success
     menu_count = len(consumer_data["menus"])
