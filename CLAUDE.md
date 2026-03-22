@@ -34,7 +34,8 @@ Single-file script (`download_menus.py`) with this flow:
 4. Write raw snapshot to `data/raw/menus_TIMESTAMP.json`
 5. Resolve modifier references (Toast returns modifiers as reference IDs in top-level dicts, not inline), transform into clean consumer format → `data/current/menus.json`
 6. Generate markdown → `data/current/menus.md`
-7. Append to `data/log.json`
+7. Prune raw snapshots older than 30 days
+8. Append to `data/log.json`
 
 All writes to `data/current/` are atomic (write-to-temp, then rename).
 

@@ -18,7 +18,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -32,6 +32,7 @@ RAW_DIR = DATA_DIR / "raw"
 CURRENT_DIR = DATA_DIR / "current"
 LOG_FILE = DATA_DIR / "log.json"
 MAX_LOG_ENTRIES = 500
+RAW_RETENTION_DAYS = 30
 
 
 # ── Toast API ────────────────────────────────────────────────────────
@@ -418,6 +419,20 @@ def atomic_write(path, content, binary=False):
         raise
 
 
+def prune_raw_snapshots():
+    """Delete raw snapshots older than RAW_RETENTION_DAYS."""
+    if not RAW_DIR.exists():
+        return
+    cutoff = datetime.now() - timedelta(days=RAW_RETENTION_DAYS)
+    pruned = 0
+    for f in RAW_DIR.glob("menus_*.json"):
+        if f.stat().st_mtime < cutoff.timestamp():
+            f.unlink()
+            pruned += 1
+    if pruned:
+        print(f"Pruned {pruned} raw snapshot(s) older than {RAW_RETENTION_DAYS} days.")
+
+
 def append_log(status, toast_last_modified=None, error=None):
     """Append an entry to data/log.json, trimming to MAX_LOG_ENTRIES."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -546,6 +561,9 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
     atomic_write(CURRENT_DIR / "cafe_menu.json", json.dumps(cafe_menu, indent=2))
     atomic_write(CURRENT_DIR / "cafe_menu.md",
                  generate_sectioned_markdown("Lowertown Cafe Menu", cafe_menu))
+
+    # Prune old raw snapshots
+    prune_raw_snapshots()
 
     # Log success
     menu_count = len(consumer_data["menus"])

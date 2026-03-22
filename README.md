@@ -48,7 +48,8 @@ launchctl load ~/Library/LaunchAgents/com.lowertown.menu-download.plist
 3. Fetch full menus, save raw snapshot to `data/raw/`
 4. Resolve Toast's modifier reference system (IDs → inline data), transform into clean consumer format
 5. Write `data/current/menus.json` and `data/current/menus.md` (atomic writes)
-6. Append entry to `data/log.json` (trimmed to 500 entries)
+6. Prune raw snapshots older than 30 days
+7. Append entry to `data/log.json` (trimmed to 500 entries)
 
 ## Project Structure
 
@@ -61,6 +62,6 @@ data/
   current/                           # Latest processed output
     menus.json                       # Consumer-ready JSON
     menus.md                         # Human-readable markdown
-  raw/                               # Timestamped raw API snapshots
+  raw/                               # Timestamped raw API snapshots (pruned after 30 days)
   log.json                           # Run history
 ```
