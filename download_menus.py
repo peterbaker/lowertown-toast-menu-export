@@ -257,6 +257,80 @@ def generate_markdown(consumer_data):
     return "\n".join(lines)
 
 
+# ── Post-Processors ──────────────────────────────────────────────────
+
+SKIP_GROUPS = {"***Don't Make***", "Coffee/Tea"}
+
+BAR_MENU_SOURCES = {
+    "qr": "QR Code Menu",
+    "happy_hour": "Happy Hour",
+    "late_night": "Late Night Happy Hour",
+}
+
+
+def build_bar_menu(consumer_data):
+    """Extract bar menu from consumer data: QR Code Menu groups + happy hour sections."""
+    menus_by_name = {m["name"]: m for m in consumer_data["menus"]}
+    bar_menu = {
+        "fetched_at": consumer_data["fetched_at"],
+        "toast_last_modified": consumer_data["toast_last_modified"],
+        "sections": [],
+    }
+
+    def slim_item(item):
+        return {
+            "name": item["name"],
+            "description": item.get("description", ""),
+            "price": item["price"],
+            "price_display": item["price_display"],
+        }
+
+    # Main sections from QR Code Menu
+    qr_menu = menus_by_name.get(BAR_MENU_SOURCES["qr"])
+    if qr_menu:
+        for group in qr_menu["groups"]:
+            if group["name"] in SKIP_GROUPS:
+                continue
+            bar_menu["sections"].append({
+                "name": group["name"],
+                "items": [slim_item(item) for item in group["items"]],
+            })
+
+    # Happy hour sections
+    for key in ("happy_hour", "late_night"):
+        hh_menu = menus_by_name.get(BAR_MENU_SOURCES[key])
+        if not hh_menu:
+            continue
+        for group in hh_menu["groups"]:
+            bar_menu["sections"].append({
+                "name": f"{hh_menu['name']} — {group['name']}",
+                "items": [slim_item(item) for item in group["items"]],
+            })
+
+    return bar_menu
+
+
+def generate_bar_menu_markdown(bar_menu):
+    """Render bar menu as markdown."""
+    lines = []
+    fetched_dt = datetime.fromisoformat(bar_menu["fetched_at"])
+    lines.append("# Lowertown Bar Menu")
+    lines.append(f"*Last updated: {fetched_dt.strftime('%B %d, %Y at %-I:%M %p')}*")
+    lines.append("")
+
+    for section in bar_menu["sections"]:
+        lines.append(f"## {section['name']}")
+        lines.append("")
+        for item in section["items"]:
+            price_str = item["price_display"] or "Market Price"
+            lines.append(f"- **{item['name']}** — {price_str}")
+            if item.get("description"):
+                lines.append(f"  {item['description']}")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
 # ── File I/O ─────────────────────────────────────────────────────────
 
 def atomic_write(path, content, binary=False):
@@ -385,6 +459,11 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
     # Generate markdown
     markdown = generate_markdown(consumer_data)
     atomic_write(CURRENT_DIR / "menus.md", markdown)
+
+    # Post-processors
+    bar_menu = build_bar_menu(consumer_data)
+    atomic_write(CURRENT_DIR / "bar_menu.json", json.dumps(bar_menu, indent=2))
+    atomic_write(CURRENT_DIR / "bar_menu.md", generate_bar_menu_markdown(bar_menu))
 
     # Log success
     menu_count = len(consumer_data["menus"])
