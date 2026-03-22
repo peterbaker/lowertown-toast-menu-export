@@ -79,6 +79,24 @@ def fetch_menus(hostname, token, restaurant_guid):
     return resp.json()
 
 
+def fetch_stock(hostname, token, restaurant_guid):
+    """Fetch inventory/stock status. Returns set of out-of-stock item GUIDs."""
+    resp = requests.get(
+        f"https://{hostname}/stock/v1/inventory",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Toast-Restaurant-External-ID": restaurant_guid,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return {
+        item["guid"]
+        for item in resp.json()
+        if item.get("status") == "OUT_OF_STOCK"
+    }
+
+
 def discover_restaurant(hostname, token, restaurant_guid):
     """Try to fetch restaurant info for discovery/verification."""
     resp = requests.get(
@@ -268,8 +286,13 @@ BAR_MENU_SOURCES = {
 }
 
 
-def build_bar_menu(consumer_data):
-    """Extract bar menu from consumer data: QR Code Menu groups + happy hour sections."""
+def build_bar_menu(consumer_data, out_of_stock_guids=None):
+    """Extract bar menu from consumer data: QR Code Menu groups + happy hour sections.
+
+    Items whose GUID is in out_of_stock_guids are excluded.
+    """
+    if out_of_stock_guids is None:
+        out_of_stock_guids = set()
     menus_by_name = {m["name"]: m for m in consumer_data["menus"]}
     bar_menu = {
         "fetched_at": consumer_data["fetched_at"],
@@ -280,10 +303,14 @@ def build_bar_menu(consumer_data):
     def slim_item(item):
         return {
             "name": item["name"],
+            "guid": item["guid"],
             "description": item.get("description", ""),
             "price": item["price"],
             "price_display": item["price_display"],
         }
+
+    def is_available(item):
+        return item["guid"] not in out_of_stock_guids
 
     # Main sections from QR Code Menu
     qr_menu = menus_by_name.get(BAR_MENU_SOURCES["qr"])
@@ -291,10 +318,9 @@ def build_bar_menu(consumer_data):
         for group in qr_menu["groups"]:
             if group["name"] in SKIP_GROUPS:
                 continue
-            bar_menu["sections"].append({
-                "name": group["name"],
-                "items": [slim_item(item) for item in group["items"]],
-            })
+            items = [slim_item(i) for i in group["items"] if is_available(i)]
+            if items:
+                bar_menu["sections"].append({"name": group["name"], "items": items})
 
     # Happy hour sections
     for key in ("happy_hour", "late_night"):
@@ -302,10 +328,12 @@ def build_bar_menu(consumer_data):
         if not hh_menu:
             continue
         for group in hh_menu["groups"]:
-            bar_menu["sections"].append({
-                "name": f"{hh_menu['name']} — {group['name']}",
-                "items": [slim_item(item) for item in group["items"]],
-            })
+            items = [slim_item(i) for i in group["items"] if is_available(i)]
+            if items:
+                bar_menu["sections"].append({
+                    "name": f"{hh_menu['name']} — {group['name']}",
+                    "items": items,
+                })
 
     return bar_menu
 
@@ -460,8 +488,14 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
     markdown = generate_markdown(consumer_data)
     atomic_write(CURRENT_DIR / "menus.md", markdown)
 
+    # Fetch stock for post-processors
+    try:
+        out_of_stock = fetch_stock(hostname, token, restaurant_guid)
+    except requests.HTTPError:
+        out_of_stock = set()  # Degrade gracefully — show all items if stock API fails
+
     # Post-processors
-    bar_menu = build_bar_menu(consumer_data)
+    bar_menu = build_bar_menu(consumer_data, out_of_stock)
     atomic_write(CURRENT_DIR / "bar_menu.json", json.dumps(bar_menu, indent=2))
     atomic_write(CURRENT_DIR / "bar_menu.md", generate_bar_menu_markdown(bar_menu))
 
