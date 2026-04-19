@@ -24,6 +24,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from menu_diff import diff_menu, record_changes
+
 # ── Paths ────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -419,6 +421,37 @@ def atomic_write(path, content, binary=False):
         raise
 
 
+def _load_json_safe(path):
+    """Read a JSON file; return None if missing or unreadable."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _summarize_event(event):
+    """One-line summary of a change-tracking event (for stdout)."""
+    parts = []
+    for profile, sections in (event or {}).get("profiles", {}).items():
+        if sections.get("initial") or not sections:
+            continue
+        added = removed = priced = 0
+        for diff in sections.values():
+            if not isinstance(diff, dict):
+                continue
+            added   += len(diff.get("added", []))
+            removed += len(diff.get("removed", []))
+            priced  += len(diff.get("price_changes", []))
+        if added or removed or priced:
+            bits = []
+            if added:   bits.append(f"+{added}")
+            if removed: bits.append(f"-{removed}")
+            if priced:  bits.append(f"${priced}")
+            parts.append(f"{profile} ({' '.join(bits)})")
+    return ", ".join(parts)
+
+
 def prune_raw_snapshots():
     """Delete raw snapshots older than RAW_RETENTION_DAYS."""
     if not RAW_DIR.exists():
@@ -551,7 +584,10 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
     except requests.HTTPError:
         out_of_stock = set()  # Degrade gracefully — show all items if stock API fails
 
-    # Post-processors
+    # Post-processors — read the old versions FIRST, so we can diff before overwriting
+    old_bar  = _load_json_safe(CURRENT_DIR / "bar_menu.json")
+    old_cafe = _load_json_safe(CURRENT_DIR / "cafe_menu.json")
+
     bar_menu = build_bar_menu(consumer_data, out_of_stock)
     atomic_write(CURRENT_DIR / "bar_menu.json", json.dumps(bar_menu, indent=2))
     atomic_write(CURRENT_DIR / "bar_menu.md",
@@ -561,6 +597,24 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
     atomic_write(CURRENT_DIR / "cafe_menu.json", json.dumps(cafe_menu, indent=2))
     atomic_write(CURRENT_DIR / "cafe_menu.md",
                  generate_sectioned_markdown("Lowertown Cafe Menu", cafe_menu))
+
+    # Change tracking — diff new vs previous consumer menus, append to changes log
+    try:
+        event = record_changes(
+            DATA_DIR,
+            timestamp=fetched_at,
+            toast_last_modified=toast_last_modified,
+            per_profile={
+                "bar":  diff_menu(old_bar,  bar_menu),
+                "cafe": diff_menu(old_cafe, cafe_menu),
+            },
+        )
+        if event:
+            summary = _summarize_event(event)
+            if summary:
+                print(f"  Changes: {summary}")
+    except Exception as e:
+        print(f"  (change tracking failed: {e})", file=sys.stderr)
 
     # Prune old raw snapshots
     prune_raw_snapshots()

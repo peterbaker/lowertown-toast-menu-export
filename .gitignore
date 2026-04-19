@@ -4,6 +4,8 @@ data/raw/
 data/current/
 data/log.json
 data/launchd.log
+data/changes.jsonl
+data/changes.md
 __pycache__/
 *.pyc
 .venv/
