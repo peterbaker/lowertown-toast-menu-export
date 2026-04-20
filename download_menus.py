@@ -341,7 +341,7 @@ def build_bar_menu(consumer_data, out_of_stock_guids=None):
     return bar_menu
 
 
-CAFE_MENU_GROUPS = {"Coffee", "Tea", "Non-Alcoholic/Kombucha", "Beverages"}
+CAFE_MENU_GROUPS = {"Coffee", "Tea", "Non-Alcoholic/Kombucha", "Beverages", "Coffee Beans"}
 
 
 def build_cafe_menu(consumer_data, out_of_stock_guids=None):
