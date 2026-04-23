@@ -546,39 +546,49 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
         print(f"Metadata fetch failed: {e}", file=sys.stderr)
         sys.exit(1)
 
-    if not force:
-        cached_last_modified = get_last_modified_from_current()
-        if cached_last_modified and toast_last_modified == cached_last_modified:
-            append_log("unchanged", toast_last_modified=toast_last_modified)
-            print(f"Menu unchanged (last modified: {toast_last_modified}). Skipping.")
-            return
+    cached_last_modified = get_last_modified_from_current()
+    menu_changed = (
+        force
+        or not cached_last_modified
+        or toast_last_modified != cached_last_modified
+    )
 
-    # Fetch full menus
-    try:
-        raw_menus = fetch_menus(hostname, token, restaurant_guid)
-    except requests.HTTPError as e:
-        append_log("error", toast_last_modified=toast_last_modified,
-                   error=f"Menu fetch failed: {e}")
-        print(f"Menu fetch failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Write raw snapshot
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp_str = now.strftime("%Y-%m-%dT%H%M%S")
-    raw_path = RAW_DIR / f"menus_{timestamp_str}.json"
-    atomic_write(raw_path, json.dumps(raw_menus, indent=2))
-
-    # Process for consumers
-    consumer_data = process_menus(raw_menus, restaurant_guid, fetched_at,
-                                  toast_last_modified)
     CURRENT_DIR.mkdir(parents=True, exist_ok=True)
-    atomic_write(CURRENT_DIR / "menus.json", json.dumps(consumer_data, indent=2))
+    raw_path = None
 
-    # Generate markdown
-    markdown = generate_markdown(consumer_data)
-    atomic_write(CURRENT_DIR / "menus.md", markdown)
+    if menu_changed:
+        # Fetch full menus
+        try:
+            raw_menus = fetch_menus(hostname, token, restaurant_guid)
+        except requests.HTTPError as e:
+            append_log("error", toast_last_modified=toast_last_modified,
+                       error=f"Menu fetch failed: {e}")
+            print(f"Menu fetch failed: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    # Fetch stock for post-processors
+        # Write raw snapshot
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp_str = now.strftime("%Y-%m-%dT%H%M%S")
+        raw_path = RAW_DIR / f"menus_{timestamp_str}.json"
+        atomic_write(raw_path, json.dumps(raw_menus, indent=2))
+
+        # Process for consumers
+        consumer_data = process_menus(raw_menus, restaurant_guid, fetched_at,
+                                      toast_last_modified)
+        atomic_write(CURRENT_DIR / "menus.json", json.dumps(consumer_data, indent=2))
+
+        # Generate markdown
+        markdown = generate_markdown(consumer_data)
+        atomic_write(CURRENT_DIR / "menus.md", markdown)
+    else:
+        # Menu definition unchanged — reuse cached consumer_data so we can still
+        # refresh stock and rebuild bar/cafe menus. Toast's lastUpdated does not
+        # move when a bartender 86's an item, so stock has to be re-polled every run.
+        with open(CURRENT_DIR / "menus.json") as f:
+            consumer_data = json.load(f)
+
+    # Always refresh stock and rebuild bar/cafe menus so 86'd items drop out
+    # on the display's next refresh, not just on menu-definition edits.
     try:
         out_of_stock = fetch_stock(hostname, token, restaurant_guid)
     except requests.HTTPError:
@@ -616,22 +626,26 @@ def cmd_fetch(hostname, client_id, client_secret, restaurant_guid, force=False):
     except Exception as e:
         print(f"  (change tracking failed: {e})", file=sys.stderr)
 
-    # Prune old raw snapshots
-    prune_raw_snapshots()
+    if menu_changed:
+        # Prune old raw snapshots (only touched when we wrote a new one)
+        prune_raw_snapshots()
 
-    # Log success
-    menu_count = len(consumer_data["menus"])
-    item_count = sum(
-        len(item)
-        for m in consumer_data["menus"]
-        for g in m["groups"]
-        for item in [g["items"]]
-    )
-    append_log("changed", toast_last_modified=toast_last_modified)
-    print(f"Menus downloaded: {menu_count} menus, {item_count} items.")
-    print(f"  Raw snapshot: {raw_path}")
-    print(f"  Consumer JSON: {CURRENT_DIR / 'menus.json'}")
-    print(f"  Markdown: {CURRENT_DIR / 'menus.md'}")
+        menu_count = len(consumer_data["menus"])
+        item_count = sum(
+            len(item)
+            for m in consumer_data["menus"]
+            for g in m["groups"]
+            for item in [g["items"]]
+        )
+        append_log("changed", toast_last_modified=toast_last_modified)
+        print(f"Menus downloaded: {menu_count} menus, {item_count} items.")
+        print(f"  Raw snapshot: {raw_path}")
+        print(f"  Consumer JSON: {CURRENT_DIR / 'menus.json'}")
+        print(f"  Markdown: {CURRENT_DIR / 'menus.md'}")
+    else:
+        append_log("unchanged", toast_last_modified=toast_last_modified)
+        print(f"Menu unchanged (last modified: {toast_last_modified}). "
+              f"Stock refreshed: {len(out_of_stock)} item(s) out of stock.")
 
 
 # ── Main ─────────────────────────────────────────────────────────────
