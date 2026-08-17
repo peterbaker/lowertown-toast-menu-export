@@ -25,6 +25,7 @@ import requests
 from dotenv import load_dotenv
 
 from menu_diff import diff_menu, record_changes
+from notify import notify
 
 # ── Paths ────────────────────────────────────────────────────────────
 
@@ -33,8 +34,11 @@ DATA_DIR = BASE_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 CURRENT_DIR = DATA_DIR / "current"
 LOG_FILE = DATA_DIR / "log.json"
+ALERT_STATE_FILE = DATA_DIR / "alert_state.json"
 MAX_LOG_ENTRIES = 500
 RAW_RETENTION_DAYS = 30
+ALERT_RECIPIENT = "pete@baker.co"
+ALERT_DEDUPE_SECONDS = 3 * 60 * 60  # 3h — enough to survive a stuck rename across 4x/day fetches without repaging every run
 
 
 # ── Toast API ────────────────────────────────────────────────────────
@@ -358,6 +362,79 @@ def build_bar_menu(consumer_data, out_of_stock_guids=None):
 CAFE_MENU_GROUPS = {"Coffee", "Tea", "Non-Alcoholic/Kombucha", "Beverages", "Coffee Beans", "Cocktails"}
 
 
+def detect_cafe_group_changes(pos_menu):
+    """Diff the live Toast group names in "Cafe POS Menu" against CAFE_MENU_GROUPS.
+
+    Returns (missing, unrecognized):
+      - missing: allow-listed names with zero matching live groups this fetch
+        (rename or removal — the silent-drop case this exists to catch)
+      - unrecognized: live group names not in the allow-list (a new category
+        nobody's decided whether to show yet)
+    """
+    live_names = {g["name"] for g in pos_menu["groups"]} if pos_menu else set()
+    missing = sorted(CAFE_MENU_GROUPS - live_names)
+    unrecognized = sorted(live_names - CAFE_MENU_GROUPS)
+    return missing, unrecognized
+
+
+def _load_alert_state():
+    try:
+        with open(ALERT_STATE_FILE) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_alert_state(state):
+    atomic_write(ALERT_STATE_FILE, json.dumps(state, indent=2))
+
+
+def _due_for_alert(state, key, now_ts):
+    last = state.get(key)
+    return last is None or (now_ts - last) >= ALERT_DEDUPE_SECONDS
+
+
+def alert_cafe_group_changes(missing, unrecognized, now=None):
+    """Alert on cafe-menu Toast group renames/removals/additions, deduped per
+    group name so a stuck rename doesn't repage every scheduled fetch (4x/day).
+    Never raises — alert failures must not interrupt the primary fetch pipeline.
+    """
+    if not missing and not unrecognized:
+        return
+    now_ts = (now or datetime.now()).timestamp()
+    try:
+        state = _load_alert_state()
+
+        due_missing = [n for n in missing if _due_for_alert(state, f"missing::{n}", now_ts)]
+        if due_missing:
+            body = (
+                "Cafe menu group(s) in CAFE_MENU_GROUPS had zero matching live Toast "
+                "groups this fetch — likely a rename or removal:\n"
+                + "\n".join(f"  - {n}" for n in due_missing)
+                + "\n\nCheck menu-fetch/download_menus.py's CAFE_MENU_GROUPS against the "
+                "live Toast \"Cafe POS Menu\"."
+            )
+            notify(ALERT_RECIPIENT, "\U0001F6A8 Lowertown cafe menu: Toast group(s) missing", body)
+            for n in due_missing:
+                state[f"missing::{n}"] = now_ts
+
+        due_unrecognized = [n for n in unrecognized if _due_for_alert(state, f"new::{n}", now_ts)]
+        if due_unrecognized:
+            body = (
+                "Toast's \"Cafe POS Menu\" has new group(s) not in CAFE_MENU_GROUPS, so "
+                "they aren't shown on the cafe display:\n"
+                + "\n".join(f"  - {n}" for n in due_unrecognized)
+                + "\n\nAdd to CAFE_MENU_GROUPS in download_menus.py if it should appear."
+            )
+            notify(ALERT_RECIPIENT, "Lowertown cafe menu: new Toast group(s) not shown", body)
+            for n in due_unrecognized:
+                state[f"new::{n}"] = now_ts
+
+        _save_alert_state(state)
+    except Exception as e:
+        print(f"[alert] cafe group change alert failed: {e}", file=sys.stderr)
+
+
 def build_cafe_menu(consumer_data, out_of_stock_guids=None):
     """Extract cafe/coffee menu from Cafe POS Menu.
 
@@ -395,6 +472,17 @@ def build_cafe_menu(consumer_data, out_of_stock_guids=None):
             items = [slim_item(i) for i in group["items"] if is_available(i)]
             if items:
                 cafe_menu["sections"].append({"name": group["name"], "items": items})
+
+    missing, unrecognized = detect_cafe_group_changes(pos_menu)
+    if missing:
+        msg = f"Cafe menu group(s) missing from live Toast data (possible rename): {', '.join(missing)}"
+        print(f"WARNING: {msg}", file=sys.stderr)
+        append_log("warning", toast_last_modified=consumer_data.get("toast_last_modified"), error=msg)
+    if unrecognized:
+        msg = f"Unrecognized Toast group(s) in Cafe POS Menu (not shown): {', '.join(unrecognized)}"
+        print(f"WARNING: {msg}", file=sys.stderr)
+        append_log("warning", toast_last_modified=consumer_data.get("toast_last_modified"), error=msg)
+    alert_cafe_group_changes(missing, unrecognized)
 
     return cafe_menu
 

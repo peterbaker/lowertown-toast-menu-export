@@ -6,6 +6,7 @@ data/log.json
 data/launchd.log
 data/changes.jsonl
 data/changes.md
+data/alert_state.json
 __pycache__/
 *.pyc
 .venv/
