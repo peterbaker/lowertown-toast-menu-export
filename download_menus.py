@@ -361,6 +361,23 @@ def build_bar_menu(consumer_data, out_of_stock_guids=None):
 
 CAFE_MENU_GROUPS = {"Coffee", "Tea", "Non-Alcoholic/Kombucha", "Beverages", "Coffee Beans", "Cocktails"}
 
+# Toast "Cafe POS Menu" groups Pete has explicitly decided should NOT appear on the
+# cafe display (LOW-421) and should NOT keep re-alerting as "unrecognized" (LOW-422).
+# Do not add to CAFE_MENU_GROUPS for these — add here instead, only after an explicit
+# decision, so a genuinely new/unclassified group still alerts.
+IGNORED_GROUPS = {
+    "Beara Bakes",
+    "Beer",
+    "Botanical",
+    "Cold Comfort",
+    "Event Menu",
+    "Other Pastries/Bars/Snacks",
+    "Stickers/Retail",
+    "Vegano Italiano",
+    "Wine",
+    "Zingerman's",
+}
+
 
 def detect_cafe_group_changes(pos_menu):
     """Diff the live Toast group names in "Cafe POS Menu" against CAFE_MENU_GROUPS.
@@ -368,12 +385,13 @@ def detect_cafe_group_changes(pos_menu):
     Returns (missing, unrecognized):
       - missing: allow-listed names with zero matching live groups this fetch
         (rename or removal — the silent-drop case this exists to catch)
-      - unrecognized: live group names not in the allow-list (a new category
-        nobody's decided whether to show yet)
+      - unrecognized: live group names not in the allow-list and not in
+        IGNORED_GROUPS (a new, still-unclassified category nobody's decided
+        whether to show yet)
     """
     live_names = {g["name"] for g in pos_menu["groups"]} if pos_menu else set()
     missing = sorted(CAFE_MENU_GROUPS - live_names)
-    unrecognized = sorted(live_names - CAFE_MENU_GROUPS)
+    unrecognized = sorted(live_names - CAFE_MENU_GROUPS - IGNORED_GROUPS)
     return missing, unrecognized
 
 
