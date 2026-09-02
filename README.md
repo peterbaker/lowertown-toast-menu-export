@@ -39,8 +39,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 A launchd plist is included for automatic runs on macOS:
 
 ```bash
-ln -s "$(pwd)/com.lowertown.menu-download.plist" ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.lowertown.menu-download.plist
+# NOTE: inside a Paperclip agent run, HOME=/Users/pete/Sites/co-paperclip, so `~` is NOT
+# /Users/pete — always use the absolute path /Users/pete/Library/LaunchAgents/ (see LOW-528).
+ln -s "$(pwd)/com.lowertown.menu-download.plist" /Users/pete/Library/LaunchAgents/
+launchctl load /Users/pete/Library/LaunchAgents/com.lowertown.menu-download.plist
 ```
 
 ## How It Works
