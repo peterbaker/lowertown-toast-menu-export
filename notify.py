@@ -7,27 +7,20 @@ falls back to a printed log line so an alert failure can't interrupt the
 primary fetch pipeline.
 """
 
-import subprocess
-
 import requests
 
-# TCC-free primary transport (LOW-565/LOW-569): Messages.app's AppleScript
-# scripting bridge is wedged fleet-wide (osascript hangs indefinitely on
-# `get id of every service`/`send ... to buddy`, even though Messages itself
-# is healthy and Automation/TCC consent is intact). Webhook -> n8n -> Gmail
-# has no TCC/AppleEvent dependency — see ops-watchdog/src/notify.js, the
-# reference implementation this mirrors. Same URL as
-# ops-watchdog/config.json's alerts.webhookUrl; not secret.
+from messagebridge import send_via_bridge
+
+# TCC-free transport (LOW-565/LOW-569): webhook -> n8n -> Gmail depends on
+# nothing the OS can revoke, so it stays the default. The iMessage path was
+# repaired 2026-09-04 by routing it through MessageBridge.app — see
+# ops-watchdog/src/notify.js, the reference implementation this mirrors. Same
+# URL as ops-watchdog/config.json's alerts.webhookUrl; not secret.
 WEBHOOK_URL = "http://127.0.0.1:5678/webhook/lowertown-power-back"
 
-# 'webhook' is the active default (LOW-565/LOW-569). 'imessage' is kept below
-# for manual/future use — do not switch back without first confirming
-# `get id of every service` returns promptly under osascript.
+# 'webhook' is the active default (LOW-565/LOW-569); 'imessage' is available
+# and goes through MessageBridge.app.
 METHOD = "webhook"
-
-
-def _esc_applescript(s):
-    return str(s).replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _send_webhook(subject, body):
@@ -40,22 +33,9 @@ def _send_webhook(subject, body):
 
 
 def _send_imessage(recipient, subject, body):
-    message = f"{subject}\n\n{body}"
-    script = (
-        'tell application "Messages"\n'
-        "  set targetService to 1st service whose service type = iMessage\n"
-        f'  set targetBuddy to buddy "{_esc_applescript(recipient)}" of targetService\n'
-        f'  send "{_esc_applescript(message)}" to targetBuddy\n'
-        "end tell"
-    )
-    # timeout kills the subprocess (SIGKILL) if osascript wedges in an
-    # AppleEvent call to an unresponsive Messages.app.
-    subprocess.run(
-        ["osascript", "-e", script],
-        timeout=15,
-        check=True,
-        capture_output=True,
-    )
+    # Never osascript directly: see messagebridge.py for why an ungranted
+    # AppleEvent to Messages hangs and wedges the app for every other caller.
+    send_via_bridge("imessage", recipient, f"{subject}\n\n{body}", tag="menu-fetch")
 
 
 def notify(recipient, subject, body):
