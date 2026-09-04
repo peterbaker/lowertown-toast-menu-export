@@ -426,25 +426,28 @@ def alert_cafe_group_changes(missing, unrecognized, now=None):
         due_missing = [n for n in missing if _due_for_alert(state, f"missing::{n}", now_ts)]
         if due_missing:
             body = (
-                "Cafe menu group(s) in CAFE_MENU_GROUPS had zero matching live Toast "
-                "groups this fetch — likely a rename or removal:\n"
+                "These sections have dropped off the cafe menu screens, because "
+                "nothing in Toast matches them any more:\n\n"
                 + "\n".join(f"  - {n}" for n in due_missing)
-                + "\n\nCheck menu-fetch/download_menus.py's CAFE_MENU_GROUPS against the "
-                "live Toast \"Cafe POS Menu\"."
+                + "\n\nUsually that means the category was renamed or deleted in Toast.\n\n"
+                "Do this: rename it back in Toast, or tell me the new name and I will "
+                "update the menu to match."
             )
-            notify(ALERT_RECIPIENT, "\U0001F6A8 Lowertown cafe menu: Toast group(s) missing", body)
+            notify(ALERT_RECIPIENT, "\u26a0\ufe0f Lowertown \u2014 Cafe menu: a section vanished", body)
             for n in due_missing:
                 state[f"missing::{n}"] = now_ts
 
         due_unrecognized = [n for n in unrecognized if _due_for_alert(state, f"new::{n}", now_ts)]
         if due_unrecognized:
             body = (
-                "Toast's \"Cafe POS Menu\" has new group(s) not in CAFE_MENU_GROUPS, so "
-                "they aren't shown on the cafe display:\n"
+                "New section(s) showed up in Toast's cafe menu, but they are NOT on "
+                "the cafe screens yet:\n\n"
                 + "\n".join(f"  - {n}" for n in due_unrecognized)
-                + "\n\nAdd to CAFE_MENU_GROUPS in download_menus.py if it should appear."
+                + "\n\nNothing is broken \u2014 new sections do not appear automatically.\n\n"
+                "Do this: if it should be on the screens, tell me and I will add it. "
+                "If not, ignore this."
             )
-            notify(ALERT_RECIPIENT, "Lowertown cafe menu: new Toast group(s) not shown", body)
+            notify(ALERT_RECIPIENT, "Lowertown \u2014 Cafe menu: a new section isn't on the screens", body)
             for n in due_unrecognized:
                 state[f"new::{n}"] = now_ts
 
